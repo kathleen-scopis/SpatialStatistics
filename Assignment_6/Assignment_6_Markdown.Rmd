@@ -1,0 +1,251 @@
+---
+title: "Assignment 6: How the Internet Talks"
+author: "Diana Negron and Kathleen Scopis"
+date: "`r Sys.Date()`"
+
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    code_folding: hide
+
+---
+
+# Introduction
+
+The following code pulls in 900 recent tweets that use #septa and organizes them into a helpful wordcloud, as well as discusses emerging limitations in Twitter's API.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+# Methodology
+
+ Set working directory and install packages, set keys and tokens (found on Twitter's Dev website)
+  * CODE REDACTED *
+
+```{r include=FALSE, warning=FALSE, message=FALSE, results=FALSE}
+
+
+#install.packages("ggmap")
+#install.packages("ggplot2")
+#install.packages("rworldmap")
+#install.packages("mapproj")
+#install.packages("maps")
+#install.packages("sp")
+#install.packages("sf")
+#install.packages("tm")
+#install.packages("SnowballC")
+#install.packages("wordcloud")
+
+
+library(wordcloud)
+library(tm)
+library(SnowballC)
+library(ggmap)
+library(ggplot2)
+library(rworldmap)
+library(mapproj)
+library(maps)
+library(sp)
+library(sf)
+library(twitteR)
+library(ROAuth)
+library(base64enc)
+library(httr)
+library(httpuv)
+library(curl)
+library(devtools)
+library(bit)
+library(RTextTools)
+library(topicmodels)
+library(RCurl) 
+
+
+#    1. Find OAuth settings for twitter:
+#    https://dev.twitter.com/docs/auth/oauth
+httr::oauth_endpoints("twitter")
+
+# Consumer key and Secret Code, and Access token and secret key given on Twitter's dev website
+
+ConsumerKey <- "vyrJ42qGmhMX0VbzXSFzUzS3Y"
+ConsumerSecret <- "ovibs84go0bfXrOwxaTow1dQJEYbCC4sKf6ekIDeOmhseHcaR2"
+AccessToken <- "3940172242-cjqsawzzdvaXt7d4rSSyYNHBQJKWflbUHHr2bqw"
+AccessSecret <- "k20LXhXdb9X3lXDDH73nofavZ9KfcRD0Mc8kB2eFdD2iM"
+
+```
+
+## Pull Tweets from Twitter API
+Current API rate limits appear to be capped at 900 tweets every 15 minutes
+
+
+```{r include=TRUE, warning=FALSE, message=FALSE, results=FALSE}
+
+#    Type 1 and hit Enter if 1 appears on the screen
+twitteR::setup_twitter_oauth(ConsumerKey,ConsumerSecret,AccessToken,AccessSecret)
+
+#    Set SSL certs globally
+options(RCurlOptions = list(cainfo = system.file("CurlSSL", "cacert.pem", package = "RCurl")))
+
+
+septa <- searchTwitter("septa", lang="en", n=900)
+
+
+#     Saving twitter feed as a data frame
+df <- do.call("rbind", lapply(septa, as.data.frame))
+
+
+```
+
+## Clean Tweets
+Remove any extraneous or stop words that don't relay any significance, numbers, and special characters
+What other words need to be removed?
+```{r include=TRUE, warning=FALSE, message=FALSE, results=TRUE}
+
+#     Corpora are collections of documents containing (natural language) text. 
+#     Used in packages which employ the infrastructure provided by package tm. 
+#     Each tweet is saved as a document
+myCorpus <- Corpus(VectorSource(df$text));
+myCorpus
+
+#     Let's look at the first entry in the corpus
+strwrap(myCorpus[[1]])
+
+#     Let's do some additional cleaning
+#     Defining toSpace function
+#     Removing special characters
+toSpace <- content_transformer(function(x, pattern) gsub(pattern, " ", x))
+#Ignore the "transformation drops documents" warning messages.
+myCorpus <- tm_map(myCorpus, toSpace, "@")
+myCorpus <- tm_map(myCorpus, toSpace, "/")
+myCorpus <- tm_map(myCorpus, toSpace, "]")
+myCorpus <- tm_map(myCorpus, toSpace, "$")
+#     Let's look at the first entry in the corpus
+strwrap(myCorpus[[1]])
+
+#     Removing numbers
+myCorpus <- tm_map(myCorpus, removeNumbers)
+#     Let's look at the first entry in the corpus
+strwrap(myCorpus[[1]])
+
+#     Removing punctuation
+myCorpus <- tm_map(myCorpus, removePunctuation)
+#     Let's look at the first entry in the corpus
+strwrap(myCorpus[[1]])
+
+#     Removing non-ascii characters
+myCorpus <- tm_map(myCorpus, function(x) iconv(x, "latin1", "ASCII", sub=""))
+#     Let's look at the first entry in the corpus
+strwrap(myCorpus[[1]])
+
+#     Removing English stop words
+stopwords("english")
+myCorpus <- tm_map(myCorpus, removeWords, stopwords("english"))
+#     Let's look at the first entry in the corpus
+strwrap(myCorpus[[1]])
+
+#     Removing our own stop words
+myCorpus <- tm_map(myCorpus, removeWords,c( "may", "ttp", "qhb...", "https", "http...", "got", "get", "via", "much",  "many",  "ever", "did", "also", "let", "had", "wouldnt", "otherwise",  "seems", "seem" ))
+
+#     Let's look at the first entry in the corpus
+strwrap(myCorpus[[1]])
+
+#Removing whitespace characters
+#When rendered, a whitespace character does not correspond to a visible
+#mark, but typically does occupy an area on a page
+myCorpus <- tm_map(myCorpus, stripWhitespace)
+#     Let's look at the first entry in the corpus
+strwrap(myCorpus[[1]])
+
+#Stemming (i.e., removing common word endings like "es", "ed", "ing" etc.)
+#We might not want to do that -- Now, instead of having "Winteriscoming", 
+#we have "winteriscom"
+ #     Let's look at the first entry in the corpus
+strwrap(myCorpus[[1]])
+myCorpus
+
+
+```
+
+# Results
+## Text Matrix
+
+```{r include=TRUE, warning=FALSE, message=FALSE, results=TRUE}
+
+#Creating a Document Term Matrix (DTM)
+#DTM is a mathematical matrix that describes the frequency of terms that occur in a collection of
+#documents. In a DTM, rows correspond to documents (tweets) in thecollection and columns
+#correspond to terms. Source: https://en.wikipedia.org/wiki/Document-term_matrix
+
+#For example, see: http://d3j5m2z8950src.cloudfront.net/sites/default/files/TM16.jpg
+dtm <- DocumentTermMatrix(myCorpus)
+dtm
+dim(dtm)
+
+
+freq <- sort(colSums(as.matrix(dtm)), decreasing=TRUE)
+freq
+
+```
+
+
+
+## Word Cloud
+What does the following word cloud say about SEPTA?  Are these sentiments overwhelmingly positive or negative? 
+
+```{r include=TRUE, warning=FALSE, message=FALSE, results=TRUE}
+
+
+wordcloud(names(freq), freq, min.freq=20, colors=brewer.pal(6, "Paired"))
+
+
+```
+
+# Limitations
+## Twitter API Rate Limit
+At the time of analysis, Twitter's developer website has a stated rate limit of 900 tweets per 15 minutes per user.
+
+## Spatial Distribution of Tweets
+Alongside the sharp decline in number of tweets able to be extracted at one time, Twitter's API has also recently updated the type of data available to downloaders.  
+Latitude and longitude coordinate points are no longer available to view, therefore rendering the tweets impossible to map spatially.  
+
+The following code illustrates the process used to map the instances of tweets. 
+
+```{r include=TRUE, warning=FALSE, message=FALSE, results=FALSE}
+
+#    Remove the columns replyToSID, replyToUID and replyToSN from data frame df
+df$replyToSID <- NULL
+df$replyToUID <- NULL
+df$replyToSN <- NULL
+head(df)
+dim(df)
+
+sum(is.na(df$longitude))
+
+
+#    Let's look at the number of observations which have missing variable values
+#    There are a few hundred observations left which have NON-missing values for 
+#    latitude and longitude.
+df.geocoded=na.omit(df)
+dim(df.geocoded)
+
+#check average lat and long for tweet coordinates
+mean(df.geocoded$latitude)
+mean(df.geocoded$longitude)
+
+
+write.csv(df.geocoded, file = "df_geocoded.csv")
+geocoded.points <- read.csv("df_geocoded.csv")
+
+write.csv(df, file = "septa.csv")
+
+#Now let's plot the tweets on a world map!
+world_map <- map_data("world")
+ggplot(world_map, aes(x = long, y = lat, group = group)) +
+  geom_polygon(fill="lightgray", colour = "white") +
+  geom_point(data=geocoded.points, aes(x=longitude, y=latitude), inherit.aes=FALSE)
+
+
+```
+
